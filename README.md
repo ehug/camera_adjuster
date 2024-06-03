@@ -13,7 +13,7 @@ Author: Eric Hug
 * Open Maya's Script Editor. In a Python tab, run the tool using the following python code:
 ```python
 from importlib import reload
-from shader_io import view
+from camera_adjuster import view
 reload(view)
 view.start_up()
 ```
