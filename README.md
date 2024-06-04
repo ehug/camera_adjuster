@@ -8,7 +8,7 @@ Author: Eric Hug
 * Maya 2022 (with python 3) through 2024
 
 ## Installation
-* Place downloaded folder into your local "maya/scripts" folder.
+* Place downloaded folder into your local "maya/scripts" folder. (Make sure it is named "camera_adjuster" and *not* "camera_adjuster-main")
 * Open Maya.
 * Open Maya's Script Editor. In a Python tab, run the tool using the following python code:
 ```python
