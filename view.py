@@ -112,6 +112,7 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.refresh_btn.clicked.connect(self.load_cameras)
         self.refresh_btn.setStyleSheet('''QPushButton:pressed {background: rgb(200,200,200);
                                                               }''')
+        self.refresh_btn.setToolTip("Refresh list of existing cameras")
         self.cameras_list_hLayout.addWidget(self.combo_box)
         self.cameras_list_hLayout.addWidget(self.refresh_btn)
         self.load_cameras()
