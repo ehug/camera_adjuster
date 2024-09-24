@@ -6,11 +6,11 @@ Purpose: To pose camera for modeling objects from reference images
 
 Dependencies:
             maya
-            PySide2
+            PySide2/PySide6
 
 Author: Eric Hug
 
-Updated: 6/02/2024
+Updated: 9/24/2024
 
 Example:
     from importlib import reload
@@ -26,11 +26,16 @@ import logging
 from importlib import reload
 from functools import partial
 
-from PySide2 import QtWidgets, QtCore, QtGui
-from shiboken2 import wrapInstance
 from maya import cmds
 from maya import OpenMaya
 from maya import OpenMayaUI
+
+try:
+    from PySide6 import QtWidgets, QtCore, QtGui
+    from shiboken6 import wrapInstance
+except:
+    from PySide2 import QtWidgets, QtCore, QtGui
+    from shiboken2 import wrapInstance
 
 # ================================================================================================ #
 # VARIABLES
