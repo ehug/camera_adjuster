@@ -1,16 +1,18 @@
 '''
 # ================================================================================================ #
-Camera Adjuster 2.0
+Camera Adjuster 2.0.1
 
 Purpose: To pose camera for modeling objects from reference images
 
 Dependencies:
             maya
-            PySide2/PySide6
+            OpenMaya
+            OpenMayaUI
+            PySide2 / PySide6
 
 Author: Eric Hug
 
-Updated: 9/24/2024
+Updated: 1/06/2025
 
 Example:
     from importlib import reload
@@ -26,20 +28,27 @@ import logging
 from importlib import reload
 from functools import partial
 
+try:
+    from PySide2 import QtWidgets, QtCore, QtGui
+    from PySide2.QtWidgets import QAction
+    from shiboken2 import wrapInstance
+except:
+    from PySide6 import QtWidgets, QtCore, QtGui
+    from PySide6.QtGui import QAction
+    from shiboken6 import wrapInstance
 from maya import cmds
 from maya import OpenMaya
 from maya import OpenMayaUI
 
-try:
-    from PySide6 import QtWidgets, QtCore, QtGui
-    from shiboken6 import wrapInstance
-except:
-    from PySide2 import QtWidgets, QtCore, QtGui
-    from shiboken2 import wrapInstance
-
 # ================================================================================================ #
 # VARIABLES
 LOG = logging.getLogger(__name__)
+MENUBAR_STYLESHEET_ACTIVE = '''
+QMenuBar {
+    background: rgb(55,55,55);
+    color: lightgrey;
+}
+'''
 STYLESHEET = '''
 QPushButton {
     background: #555;
@@ -99,6 +108,30 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.main_layout = QtWidgets.QVBoxLayout()
         self.main_layout.setSpacing(6)
         self.setLayout(self.main_layout)
+        # ----- #
+        # Menus
+        # ----- #
+        self.menu_bar = QtWidgets.QMenuBar()
+        self.menu_actions_dict = {"File": [QtWidgets.QMenu("File"), 
+                                           {"Create New Camera" : [QtWidgets.QMenu("Create New Camera"), 
+                                                                   {"Perspective" : [QAction("Perspective"),partial(self.new_camera, "Perspective")],
+                                                                    "Orthographic": [QtWidgets.QMenu("Orthographic"), 
+                                                                                     {"Front" :[QAction("Front"), partial(self.new_camera, "Front")],
+                                                                                      "Back"  :[QAction("Back"),  partial(self.new_camera, "Back")],
+                                                                                      "Left"  :[QAction("Left"),  partial(self.new_camera, "Left")],
+                                                                                      "Right" :[QAction("Right"), partial(self.new_camera, "Right")],
+                                                                                      "Top"   :[QAction("Top"),   partial(self.new_camera, "Top")],
+                                                                                      "Bottom":[QAction("Bottom"),partial(self.new_camera, "Bottom")]
+                                                                                     }
+                                                                                    ]
+                                                                   }
+                                                                  ],
+                                            "Create Image Plane": [QAction("Create Image Plane"), self.new_imagePlane]
+                                           }
+                                          ]
+                                  }
+        self.build_menu(menu=self.menu_bar, menu_items=self.menu_actions_dict)
+        self.menu_bar.setStyleSheet(MENUBAR_STYLESHEET_ACTIVE)
         # ------------------------- #
         # Camera Combo Box Controls
         # ------------------------- #
@@ -106,9 +139,10 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.cameras_list_hLayout = QtWidgets.QHBoxLayout()
         self.cameras_list_widget.setLayout(self.cameras_list_hLayout)
         self.cameras_list_hLayout.setAlignment(QtCore.Qt.AlignLeft)
-        self.cameras_list_hLayout.setContentsMargins(QtCore.QMargins(0,0,0,0))
+        self.cameras_list_hLayout.setContentsMargins(QtCore.QMargins(0,6,0,0))
         self.combo_box = QtWidgets.QComboBox()
         self.combo_box.setFixedHeight(32)
+        self.combo_box.setFixedWidth(175)
         self.combo_box.currentTextChanged.connect(self.change_camera)
         self.refresh_icon = QtGui.QIcon(os.path.dirname(os.path.realpath(__file__)) + 
                                         "/icons/refresh_btn.jpg")
@@ -118,9 +152,11 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.refresh_btn.setStyleSheet('''QPushButton:pressed {background: rgb(200,200,200);
                                                               }''')
         self.refresh_btn.setToolTip("Refresh list of existing cameras")
+        self.lock_settings_cbox = QtWidgets.QCheckBox("Lock Transform Attributes")
+        self.lock_settings_cbox.clicked.connect(self.lock_camera)
         self.cameras_list_hLayout.addWidget(self.combo_box)
         self.cameras_list_hLayout.addWidget(self.refresh_btn)
-        self.load_cameras()
+        self.cameras_list_hLayout.addWidget(self.lock_settings_cbox)
         # ------------------ #
         # # Spacer
         # ------------------ #
@@ -183,8 +219,6 @@ class CameraAdjuster(QtWidgets.QWidget):
             self.image_plane_point = QtWidgets.QGraphicsRectItem()
         self.grid_widget.graph_scene.addItem(self.image_plane_point)
         self.image_plane_point.setPos(0, 0)
-        self.load_pan()
-        self.load_zoom()
         self.reset_pan_btn = QtWidgets.QPushButton("Reset Camera Pan")
         self.reset_pan_btn.clicked.connect(self.grid_widget.reset_pan)
         self.local_camera_vlayout.addWidget(self.reset_pan_btn)
@@ -194,17 +228,67 @@ class CameraAdjuster(QtWidgets.QWidget):
         # ------------------------------- #
         # Assemble Widgets to Main Layout
         # ------------------------------- #
+        self.main_layout.addWidget(self.menu_bar)
         self.main_layout.addWidget(self.cameras_list_widget)
         self.main_layout.addItem(self.spacer)
         self.main_layout.addWidget(self.separator)
         self.main_layout.addWidget(self.body_widget)
         # Finalize
+        self.load_cameras()
+        self.load_pan()
+        self.load_zoom()
         new_cam = self.combo_box.currentText()
         cmds.lookThru(new_cam)
         cmds.setAttr("{}.panZoomEnabled".format(new_cam), True)
         self.main_layout.setAlignment(QtCore.Qt.AlignTop)
         self.main_layout.setSpacing(0)
         self.setWindowFlags(QtCore.Qt.Window)
+
+
+    def build_menu(self, menu=QtWidgets.QMenu(), menu_items={}):
+        '''Create the menus at the top of the tool window.
+            Parameters:
+                        menu       : Menu for all menu items to be stored under. For initial setup, you want to set menu equal to a QMenuBar()
+                        menu_items : Dictionary with structure for assembling all menus, submenus, actions, etc. to the "menu" parameter
+                                    Format:
+                                            {"QMenu_name"   : [QMenu("QMenu_Name"),
+                                                               {"QAction_name" : [QAction("QAction_name"), function to trigger],
+                                                                "QAction_name" : [QAction("QAction_name"), function to trigger],
+                                                                etc.}],
+                                             "QAction_name" : [QAction("QAction_name"), function to trigger],
+                                              etc.
+                                            }
+        '''
+        for key, val in menu_items.items():
+            if isinstance(val[0], QtWidgets.QMenu):
+                menu.addMenu(val[0])
+                self.build_menu(menu=val[0], menu_items=val[1])
+            else:
+                menu.addAction(val[0])
+                val[0].triggered.connect(val[1])
+
+    def new_camera(self, cam_type=""):
+        '''Create a new camera for the scene.
+            Parameters:
+                        cam_type: Camera's type (ex. Front, Back, Left, Right, Top, Down, Perspective)'''
+        new_camera = cmds.camera(name=cam_type)
+        if cam_type == "Perspective":
+            cmds.viewSet(new_camera[0], persp=True)
+        elif cam_type == "Front":
+            cmds.viewSet(new_camera[0], front=True)
+        elif cam_type == "Back":
+            cmds.viewSet(new_camera[0], back=True)
+        elif cam_type == "Left":
+            cmds.viewSet(new_camera[0], leftSide=True)
+        elif cam_type == "Right":
+            cmds.viewSet(new_camera[0], rightSide=True)
+        elif cam_type == "Top":
+            cmds.viewSet(new_camera[0], top=True)
+        elif cam_type == "Bottom":
+            cmds.viewSet(new_camera[0], bottom=True)
+        self.load_cameras()
+        self.combo_box.setCurrentText(new_camera[1])
+        self.change_camera()
 
     def get_cameras(self):
         '''Get all cameras in scene.'''
@@ -217,7 +301,86 @@ class CameraAdjuster(QtWidgets.QWidget):
         cur_view.getCamera(cur_cam)
         cur_camPath = cur_cam.fullPathName()
         cur_camPath = cur_camPath.split("|")[-1]
+
         return cur_camPath
+    
+    def load_cameras(self):
+        '''Load up all cameras in scene into the combobox'''
+        current_camera = self.get_current_camera()
+        cameras = self.get_cameras()
+        # Prevent camera in viewport being changed
+        # when loading up all cameras to combobox.
+        self.combo_box.blockSignals(True)
+        self.combo_box.clear()
+        for each in cameras:
+            self.combo_box.addItem(each)
+        # Restore Setting that changes camera in viewport
+        # when combobox changes text.
+        self.combo_box.setCurrentText(current_camera)
+        self.combo_box.blockSignals(False)
+        self.grid_widget.camera = current_camera
+
+    def change_camera(self):
+        '''Change camera when combo box text changes.'''
+        if self.combo_box.currentText():
+            new_cam = self.combo_box.currentText()
+            cmds.lookThru(new_cam)
+            # Allow pan and zoom attributes to be adjusted when switching to new camera
+            cmds.setAttr("{}.panZoomEnabled".format(new_cam), True)
+            self.change_image_display()
+            self.grid_widget.camera=new_cam
+            self.load_pan()
+            self.load_zoom()
+            self.check_cam_locked_state()
+    
+    def lock_camera(self):
+        '''Locks camera's movement attributes so user doesn't accidentally use mouse to move by mistake'''
+        current_camera = self.combo_box.currentText()
+        transform_node = cmds.listRelatives(current_camera, parent=True)[0]
+        transform_list = ["tx", "ty", "tz", "rx", "ry", "rz"]
+        check = False
+        if self.lock_settings_cbox.isChecked():
+            check = True
+        for each in transform_list:
+            cmds.setAttr("{}.{}".format(transform_node, each), lock=check)
+
+    def check_cam_locked_state(self):
+        '''Updates the Locked Camera Attributes Checkbox when changing active camera'''
+        current_camera = self.combo_box.currentText()
+        transform_node = cmds.listRelatives(current_camera, parent=True)[0]
+        check = cmds.getAttr("{}.tx".format(transform_node), lock=True)
+        self.lock_settings_cbox.setChecked(check)
+
+    def new_imagePlane(self):
+        '''Create an imagePlane for active camera'''
+        current_cam = self.combo_box.currentText()
+        file_path = self.browse_command()
+        # Check if no file was selected for image plane
+        if len(file_path) == 0:
+            LOG.error("No file was selected. ImagePlane cancelled.")
+            return
+        else:
+            file_path = file_path.replace("\'", "")
+        
+        cmds.imagePlane(camera=current_cam, fileName=file_path)
+        self.change_image_display()
+    
+    def browse_command(self):
+        '''allows user to select an image file,
+           and returns folder path into textfield.
+        '''
+        file_types = "Image Files (*.jpeg *.jpg *.png *.tif);;"
+        self.sel_file = QtWidgets.QFileDialog.getOpenFileName(self,
+                                                              caption="get file",
+                                                              filter=file_types)
+        # Return path to textfield
+        if isinstance(self.sel_file, tuple):
+            # Use for 'file' or 'files'
+            new_string = list(self.sel_file)
+            new_string.pop(-1)
+            new_string = str(new_string).replace("[", "").replace("]", "")
+            
+        return new_string
 
     def get_image_plane(self):
         '''Get the image plane for the current camera'''
@@ -242,32 +405,13 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.grid_widget.graph_scene.addItem(self.image_plane_point)
         self.image_plane_point.setPos(0, 0)
 
-    def load_cameras(self):
-        '''Load up all cameras in scene into the combobox'''
-        current_camera = self.get_current_camera()
-        cameras = self.get_cameras()
-        # Prevent camera in viewport being changed
-        # when loading up all cameras to combobox.
-        self.combo_box.blockSignals(True)
-        self.combo_box.clear()
-        for each in cameras:
-            self.combo_box.addItem(each)
-        # Restore Setting that changes camera in viewport
-        # when combobox changes text.
-        self.combo_box.setCurrentText(current_camera)
-        self.combo_box.blockSignals(False)
-
-    def change_camera(self):
-        '''Change camera chen combo box text changes.'''
-        if self.combo_box.currentText():
-            new_cam = self.combo_box.currentText()
-            cmds.lookThru(new_cam)
-            # Allow pan and zoom attributes to be adjusted when switching to new camera
-            cmds.setAttr("{}.panZoomEnabled".format(new_cam), True)
-            self.change_image_display()
-            self.grid_widget.camera=new_cam
-            self.load_pan()
-            self.load_zoom()
+    def zoom_image(self):
+        '''Changes the value of attribute zoom on active camera'''
+        current_cam = self.combo_box.currentText()
+        val = self.zoom_widget.spinbox.value() / 100.000
+        cmds.setAttr("{}.zoom".format(current_cam), val)
+        img_plane_scale = 1.0 / val
+        self.image_plane_point.setScale(img_plane_scale)
 
     def reset_pan(self):
         '''Reset the pan attributes of current camera.'''
@@ -291,15 +435,7 @@ class CameraAdjuster(QtWidgets.QWidget):
         current_camera = self.combo_box.currentText()
         zoom = cmds.getAttr("{}.zoom".format(current_camera))
         self.grid_widget.scale(1/zoom,1/zoom)
-
-    def zoom_image(self):
-        '''Changes the value of attribute zoom on active camera'''
-        current_cam = self.combo_box.currentText()
-        val = self.zoom_widget.spinbox.value() / 100.000
-        cmds.setAttr("{}.zoom".format(current_cam), val)
-        img_plane_scale = 1.0 / val
-        self.image_plane_point.setScale(img_plane_scale)
-
+    
 
 class CameraView(QtWidgets.QGraphicsView):
     '''Camera Panning and Zooming UI Component
@@ -460,7 +596,6 @@ class UpDownButtons(QtWidgets.QWidget):
                        True by Default.
             btn_size:  Dimensions of each button. Ex. [32, 20]
     '''
-
     def __init__(self, parent=None, text="Direction", up_text="up", 
                  down_text="down", vertical=True, btn_size=[32, 32]):
         super(UpDownButtons, self).__init__(parent=parent)
@@ -635,15 +770,31 @@ class NavGrid(QtWidgets.QTableWidget):
         # Up Arrow Key
         if event.key() == QtCore.Qt.Key_Up:
             if self.attr:
+                full_attr = "{}.{}".format(par, self.attr)
                 current = cmds.getAttr("{}.{}".format(par, self.attr))
-                cmds.setAttr("{}.{}".format(par, self.attr), 
-                             current + self.increments_widget.step_box.value())
+                locked = cmds.getAttr(full_attr, lock=True)
+                if locked:
+                    cmds.setAttr(full_attr, lock=False)
+                    cmds.setAttr("{}.{}".format(par, self.attr), 
+                                current + self.increments_widget.step_box.value())
+                    cmds.setAttr(full_attr, lock=True)
+                else:
+                    cmds.setAttr("{}.{}".format(par, self.attr), 
+                                current + self.increments_widget.step_box.value())
         # Down Arrow Key
         if event.key() == QtCore.Qt.Key_Down:
             if self.attr:
+                full_attr = "{}.{}".format(par, self.attr)
                 current = cmds.getAttr("{}.{}".format(par, self.attr))
-                cmds.setAttr("{}.{}".format(par, self.attr), 
-                             current - self.increments_widget.step_box.value())
+                locked = cmds.getAttr(full_attr, lock=True)
+                if locked:
+                    cmds.setAttr(full_attr, lock=False)
+                    cmds.setAttr("{}.{}".format(par, self.attr), 
+                                current - self.increments_widget.step_box.value())
+                    cmds.setAttr(full_attr, lock=True)
+                else:
+                    cmds.setAttr("{}.{}".format(par, self.attr), 
+                                current - self.increments_widget.step_box.value())
 
     def get_current_camera(self):
         '''Get the current camera being used in the active viewport.'''
@@ -660,13 +811,24 @@ class NavGrid(QtWidgets.QTableWidget):
         attribute_name = "{}.{}".format(object_name, attribute)
         # Adjust Camera
         current_val = cmds.getAttr(attribute_name)
-        if negative:
-            output = current_val - increment
-            cmds.setAttr(attribute_name, output)
+        locked = cmds.getAttr(attribute_name, lock=True)
+        if locked:
+            cmds.setAttr(attribute_name, lock=False)
+            if negative:
+                output = current_val - increment
+                cmds.setAttr(attribute_name, output)
+            else:
+                output = current_val + increment
+                cmds.setAttr(attribute_name, output)
+            cmds.setAttr(attribute_name, lock=True)
         else:
-            output = current_val + increment
-            cmds.setAttr(attribute_name, output)
-    
+            if negative:
+                output = current_val - increment
+                cmds.setAttr(attribute_name, output)
+            else:
+                output = current_val + increment
+                cmds.setAttr(attribute_name, output)
+            
     def set_attr(self, attr, neg):
         '''Change value of selected object(s)
             Parameters:
