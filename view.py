@@ -434,6 +434,7 @@ class CameraAdjuster(QtWidgets.QWidget):
            and apply it to the CameraView'''
         current_camera = self.combo_box.currentText()
         zoom = cmds.getAttr("{}.zoom".format(current_camera))
+        self.grid_widget.setTransform(QtGui.QTransform().scale(1, 1))
         self.grid_widget.scale(1/zoom,1/zoom)
     
 
