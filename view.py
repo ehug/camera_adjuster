@@ -1,6 +1,6 @@
 '''
 # ================================================================================================ #
-Camera Adjuster 2.0.1
+Camera Adjuster 2.1.0
 
 Purpose: To pose camera for modeling objects from reference images
 
@@ -12,7 +12,7 @@ Dependencies:
 
 Author: Eric Hug
 
-Updated: 1/06/2025
+Updated: 4/22/2025
 
 Example:
     from importlib import reload
@@ -71,6 +71,7 @@ def start_up(width=500, height=200):
     '''Start Function for user to run the tool.'''
     win = get_maya_main_window()
     for each in win.findChildren(QtWidgets.QWidget):
+        # if type(each) == 'PySide2.QtWidgets.QWidget':
         if each.objectName() == "CameraAdjuster":
             each.deleteLater()
     tool = CameraAdjuster(parent=win)
@@ -126,7 +127,10 @@ class CameraAdjuster(QtWidgets.QWidget):
                                                                                     ]
                                                                    }
                                                                   ],
-                                            "Create Image Plane": [QAction("Create Image Plane"), self.new_imagePlane]
+                                            "Image Planes": [QAction("Image Planes"), "separator"],
+                                            "Create Image Plane": [QAction("Create Image Plane"), self.new_imagePlane],
+                                            "Replace Image Plane": [QAction("Replace Image Plane"), self.replace_imagePlane],
+                                            "Delete Image Plane": [QAction("Delete Image Plane"), self.delete_imagePlane]
                                            }
                                           ]
                                   }
@@ -154,9 +158,21 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.refresh_btn.setToolTip("Refresh list of existing cameras")
         self.lock_settings_cbox = QtWidgets.QCheckBox("Lock Transform Attributes")
         self.lock_settings_cbox.clicked.connect(self.lock_camera)
+        self.rotate_image_step_widget = StepWidget(limits=[0, 359.999], text="Rotate Image Plane (Degrees):", decimals=3, step_size=5.0, default_val=90)
+        self.rotate_cw_btn = QtWidgets.QPushButton(self.refresh_icon, "")
+        self.ccw_icon = QtGui.QIcon(os.path.dirname(os.path.realpath(__file__)) + 
+                                        "/icons/ccw_btn.jpg")
+        self.rotate_ccw_btn = QtWidgets.QPushButton(self.ccw_icon, "")
+        self.rotate_cw_btn.clicked.connect(partial(self.rotate_image_plane, 1))
+        self.rotate_ccw_btn.clicked.connect(partial(self.rotate_image_plane, -1))
+        self.rotate_cw_btn.setFixedSize(32, 32)
+        self.rotate_ccw_btn.setFixedSize(32, 32)
         self.cameras_list_hLayout.addWidget(self.combo_box)
         self.cameras_list_hLayout.addWidget(self.refresh_btn)
         self.cameras_list_hLayout.addWidget(self.lock_settings_cbox)
+        self.cameras_list_hLayout.addWidget(self.rotate_image_step_widget)
+        self.cameras_list_hLayout.addWidget(self.rotate_cw_btn)
+        self.cameras_list_hLayout.addWidget(self.rotate_ccw_btn)
         # ------------------ #
         # # Spacer
         # ------------------ #
@@ -237,6 +253,8 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.load_cameras()
         self.load_pan()
         self.load_zoom()
+        self.check_cam_locked_state()
+        self.load_rotate()
         new_cam = self.combo_box.currentText()
         cmds.lookThru(new_cam)
         cmds.setAttr("{}.panZoomEnabled".format(new_cam), True)
@@ -265,7 +283,10 @@ class CameraAdjuster(QtWidgets.QWidget):
                 self.build_menu(menu=val[0], menu_items=val[1])
             else:
                 menu.addAction(val[0])
-                val[0].triggered.connect(val[1])
+                if val[1] == "separator":
+                    val[0].setSeparator(True)
+                else:
+                    val[0].triggered.connect(val[1])
 
     def new_camera(self, cam_type=""):
         '''Create a new camera for the scene.
@@ -332,6 +353,7 @@ class CameraAdjuster(QtWidgets.QWidget):
             self.load_pan()
             self.load_zoom()
             self.check_cam_locked_state()
+            self.load_rotate()
     
     def lock_camera(self):
         '''Locks camera's movement attributes so user doesn't accidentally use mouse to move by mistake'''
@@ -363,6 +385,30 @@ class CameraAdjuster(QtWidgets.QWidget):
             file_path = file_path.replace("\'", "")
         
         cmds.imagePlane(camera=current_cam, fileName=file_path)
+        self.change_image_display()
+
+    def replace_imagePlane(self):
+        '''Replace an imagePlane for active camera'''
+        current_cam = self.combo_box.currentText()
+        file_path = self.browse_command()
+        # Check if no file was selected for image plane
+        if len(file_path) == 0:
+            LOG.error("No file was selected. ImagePlane cancelled.")
+            return
+        else:
+            file_path = file_path.replace("\'", "")
+        self.delete_imagePlane()
+        cmds.imagePlane(camera=current_cam, fileName=file_path)
+        self.change_image_display()
+
+    def delete_imagePlane(self):
+        '''Delete imagePlane from active camera'''
+        current_cam = self.combo_box.currentText()
+        image_plane = cmds.listConnections("{}.imagePlane".format(current_cam))
+        if image_plane != None:
+            cmds.delete(image_plane)
+        else:
+            LOG.warning("No Image Plane detected. Deletion ignored.")
         self.change_image_display()
     
     def browse_command(self):
@@ -436,8 +482,41 @@ class CameraAdjuster(QtWidgets.QWidget):
         zoom = cmds.getAttr("{}.zoom".format(current_camera))
         self.grid_widget.setTransform(QtGui.QTransform().scale(1, 1))
         self.grid_widget.scale(1/zoom,1/zoom)
-    
 
+    def rotate_image_plane(self, direction=1):
+        '''Rotate Image Plane parented to camera and previewed in tool
+        Parameters:
+            direction: rotate image clockwise (1) or counter-clockwise (-1)
+        '''
+        # Get image Plane Shape
+        self.image_path = self.get_image_plane()
+        if not os.path.isfile(self.image_path):
+            LOG.error("Image not found attached to camera.")
+        else:
+            current_camera = self.get_current_camera()
+            image_plane = cmds.listConnections("{}.imagePlane".format(current_camera))[0]
+            shape = cmds.listRelatives(image_plane, shapes=True)[0]
+            # Check which button is clicked to determine whether to add or subtract
+            # get current rotation value
+            current_val = cmds.getAttr("{}.rotate".format(shape)) 
+            # Get step value from step widget and multiply by +-1 depending on pressed button.
+            rotate_by_val = self.rotate_image_step_widget.step_box.value() * direction
+            new_total_val = (current_val + rotate_by_val)
+            cmds.setAttr("{}.rotate".format(shape), new_total_val)
+            self.image_plane_point.setRotation(new_total_val)
+
+    def load_rotate(self):
+        '''When camera changes, take image plane shape's rotate attribute 
+           and apply them to the CameraView'''
+        self.image_path = self.get_image_plane()
+        if os.path.isfile(self.image_path):
+            current_camera = self.get_current_camera()
+            image_plane = cmds.listConnections("{}.imagePlane".format(current_camera))[0]
+            shape = cmds.listRelatives(image_plane, shapes=True)[0]
+            current_val = cmds.getAttr("{}.rotate".format(shape)) 
+            self.image_plane_point.setRotation(current_val)
+
+    
 class CameraView(QtWidgets.QGraphicsView):
     '''Camera Panning and Zooming UI Component
         Parameters:
@@ -550,9 +629,9 @@ class CameraView(QtWidgets.QGraphicsView):
         bounding_box = self.mapToScene(self.viewport().geometry()).boundingRect()
         center = bounding_box.center()
         x = center.x() - 4
-        y = -(center.y() - 4)
-        cmds.setAttr("{}.horizontalPan".format(self.camera), (x/self.width))
-        cmds.setAttr("{}.verticalPan".format(self.camera), (y/self.height))
+        y = center.y() - 4
+        cmds.panZoom( self.camera, absolute=True, rightDistance=(x/self.width) )
+        cmds.panZoom( self.camera, absolute=True, downDistance=(y/self.height) )
 
 
 class CameraScene(QtWidgets.QGraphicsScene):
@@ -568,6 +647,7 @@ class CameraScene(QtWidgets.QGraphicsScene):
 
 
 class CameraImagePoint(QtWidgets.QGraphicsPixmapItem):
+    '''Represents the Image that appears which the user can interact with for panning and zooming'''
     def __init__(self, parent=None, image_path="", size=[100,100]):
         super(CameraImagePoint, self).__init__(parent=parent)
         self.size = size
