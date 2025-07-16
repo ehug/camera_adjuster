@@ -1,6 +1,6 @@
 '''
 # ================================================================================================ #
-Camera Adjuster 2.1.0
+Camera Adjuster 2.2.0
 
 Purpose: To pose camera for modeling objects from reference images
 
@@ -12,7 +12,7 @@ Dependencies:
 
 Author: Eric Hug
 
-Updated: 4/22/2025
+Updated: 7/16/2025
 
 Example:
     from importlib import reload
@@ -91,6 +91,8 @@ def get_maya_main_window():
 class CameraAdjuster(QtWidgets.QWidget):
     def __init__(self, parent=None, currentTab=1):
         super(CameraAdjuster, self).__init__(parent=parent)
+        self.camera_dict = {}
+        self.current_camera = ""
         self.setStyleSheet(STYLESHEET)
         self.tips_str = "Tips: \n" \
                         "> You can select a \n" \
@@ -115,7 +117,12 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.menu_bar = QtWidgets.QMenuBar()
         self.menu_actions_dict = {"File": [QtWidgets.QMenu("File"), 
                                            {"Create New Camera" : [QtWidgets.QMenu("Create New Camera"), 
-                                                                   {"Perspective" : [QAction("Perspective"),partial(self.new_camera, "Perspective")],
+                                                                   {"Perspective" : [QtWidgets.QMenu("Perspective"), 
+                                                                                    {"Regular"            :[QAction("Regular"),           partial(self.new_camera, "Perspective")],
+                                                                                     "Orthographic Mode"  :[QAction("Orthographic Mode"), partial(self.new_camera, "Persp_Ortho")]
+                                                                                     }
+                                                                                    ],
+                                                                                    # [QAction("Perspective"),partial(self.new_camera, "Perspective")],
                                                                     "Orthographic": [QtWidgets.QMenu("Orthographic"), 
                                                                                      {"Front" :[QAction("Front"), partial(self.new_camera, "Front")],
                                                                                       "Back"  :[QAction("Back"),  partial(self.new_camera, "Back")],
@@ -163,8 +170,7 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.ccw_icon = QtGui.QIcon(os.path.dirname(os.path.realpath(__file__)) + 
                                         "/icons/ccw_btn.jpg")
         self.rotate_ccw_btn = QtWidgets.QPushButton(self.ccw_icon, "")
-        self.rotate_cw_btn.clicked.connect(partial(self.rotate_image_plane, 1))
-        self.rotate_ccw_btn.clicked.connect(partial(self.rotate_image_plane, -1))
+
         self.rotate_cw_btn.setFixedSize(32, 32)
         self.rotate_ccw_btn.setFixedSize(32, 32)
         self.cameras_list_hLayout.addWidget(self.combo_box)
@@ -221,11 +227,24 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.body_hLayout.addWidget(self.local_camera_widget)
         # ------------------------------- #
         # # # Camera Pan Grid Control # # #
-        self.grid_size = [cmds.getAttr("defaultResolution.width"), 
-                          cmds.getAttr("defaultResolution.height")]
-        self.grid_widget = CameraView(camera = self.get_current_camera(),
-                                           width  = self.grid_size[0],
-                                           height = self.grid_size[1])
+        cur_view = OpenMayaUI.M3dView.active3dView()
+        self.width_to_height_ratio = cur_view.portHeight() / cur_view.portWidth()
+
+        # self.grid_size takes the width and height of the Maya scene viewport in pixels on your screen 
+        # to set the dimensions of the tool's zoom and pan interface to one-third that size. 
+        # To change proportions, change the division from 3 to any number you want. 
+        # ex. "/ 2" makes the ui half the width and height of the viewport.
+        self.grid_size = [round((cur_view.portWidth() - (cur_view.portWidth() % 10)) / 3), 
+                          round((cur_view.portHeight() - (cur_view.portHeight() % 10)) / 3)]
+        
+        # need a default camera to load everything w/o errors initially
+        self.camera_dict = {"perspShape":NewPerspCamera(name="perspShape", 
+                                                        grid_x = self.grid_size[0], 
+                                                        grid_y = self.grid_size[1], 
+                                                        zoom   = 1 / cmds.getAttr("perspShape.zoom"))} 
+        self.grid_widget = CameraView(camera = self.camera_dict["perspShape"],
+                                      width  = self.grid_size[0],
+                                      height = self.grid_size[1])
         self.local_camera_vlayout.addWidget(self.grid_widget)
         self.image_path = self.get_image_plane()
         if os.path.isfile(self.image_path):
@@ -241,6 +260,9 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.zoom_btn = QtWidgets.QPushButton("Reset Camera Zoom")
         self.zoom_btn.clicked.connect(self.grid_widget.reset_zoom)
         self.local_camera_vlayout.addWidget(self.zoom_btn)
+
+        self.rotate_cw_btn.clicked.connect(partial(self.rotate_image_plane, 1))
+        self.rotate_ccw_btn.clicked.connect(partial(self.rotate_image_plane, -1))
         # ------------------------------- #
         # Assemble Widgets to Main Layout
         # ------------------------------- #
@@ -249,18 +271,22 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.main_layout.addItem(self.spacer)
         self.main_layout.addWidget(self.separator)
         self.main_layout.addWidget(self.body_widget)
-        # Finalize
+        # Finalize UI Settings
         self.load_cameras()
-        self.load_pan()
-        self.load_zoom()
-        self.check_cam_locked_state()
-        self.load_rotate()
         new_cam = self.combo_box.currentText()
-        cmds.lookThru(new_cam)
+        if new_cam != "perspShape":
+            cmds.lookThru(new_cam)
         cmds.setAttr("{}.panZoomEnabled".format(new_cam), True)
+        self.current_camera = self.camera_dict[new_cam]
+        self.grid_widget.camera = self.current_camera
+        self.grid_widget.camera.zoom = self.current_camera.zoom
         self.main_layout.setAlignment(QtCore.Qt.AlignTop)
         self.main_layout.setSpacing(0)
         self.setWindowFlags(QtCore.Qt.Window)
+        self.grid_widget.load_pan()
+        self.grid_widget.load_zoom()
+        self.check_cam_locked_state()
+        self.load_rotate()
 
 
     def build_menu(self, menu=QtWidgets.QMenu(), menu_items={}):
@@ -295,6 +321,9 @@ class CameraAdjuster(QtWidgets.QWidget):
         new_camera = cmds.camera(name=cam_type)
         if cam_type == "Perspective":
             cmds.viewSet(new_camera[0], persp=True)
+        elif cam_type == "Persp_Ortho":
+            cmds.viewSet(new_camera[0], persp=True)
+            cmds.setAttr(new_camera[1] + ".orthographic", 1)
         elif cam_type == "Front":
             cmds.viewSet(new_camera[0], front=True)
         elif cam_type == "Back":
@@ -327,6 +356,7 @@ class CameraAdjuster(QtWidgets.QWidget):
     
     def load_cameras(self):
         '''Load up all cameras in scene into the combobox'''
+        self.camera_dict = {}
         current_camera = self.get_current_camera()
         cameras = self.get_cameras()
         # Prevent camera in viewport being changed
@@ -335,12 +365,20 @@ class CameraAdjuster(QtWidgets.QWidget):
         self.combo_box.clear()
         for each in cameras:
             self.combo_box.addItem(each)
+            if cmds.getAttr(each + ".orthographic"):
+                self.camera_dict[each] = NewOrthoCamera(name=each)
+            else:
+                self.camera_dict[each] = NewPerspCamera(name=each, grid_x=self.grid_widget.width, grid_y=self.grid_widget.height)
+            self.camera_dict[each].zoom = 1 / cmds.getAttr(each+".zoom")
+            self.camera_dict[each].pan_x = cmds.getAttr(each+".horizontalPan")
+            self.camera_dict[each].pan_y = cmds.getAttr(each+".verticalPan")
+            
         # Restore Setting that changes camera in viewport
         # when combobox changes text.
         self.combo_box.setCurrentText(current_camera)
         self.combo_box.blockSignals(False)
-        self.grid_widget.camera = current_camera
-
+        self.grid_widget.camera = self.camera_dict[current_camera]
+        
     def change_camera(self):
         '''Change camera when combo box text changes.'''
         if self.combo_box.currentText():
@@ -349,12 +387,13 @@ class CameraAdjuster(QtWidgets.QWidget):
             # Allow pan and zoom attributes to be adjusted when switching to new camera
             cmds.setAttr("{}.panZoomEnabled".format(new_cam), True)
             self.change_image_display()
-            self.grid_widget.camera=new_cam
-            self.load_pan()
-            self.load_zoom()
-            self.check_cam_locked_state()
+            self.current_camera = self.camera_dict[new_cam]
+            self.grid_widget.camera = self.current_camera
+            self.grid_widget.load_pan()
+            self.grid_widget.load_zoom()
             self.load_rotate()
-    
+            self.check_cam_locked_state()
+            
     def lock_camera(self):
         '''Locks camera's movement attributes so user doesn't accidentally use mouse to move by mistake'''
         current_camera = self.combo_box.currentText()
@@ -459,30 +498,6 @@ class CameraAdjuster(QtWidgets.QWidget):
         img_plane_scale = 1.0 / val
         self.image_plane_point.setScale(img_plane_scale)
 
-    def reset_pan(self):
-        '''Reset the pan attributes of current camera.'''
-        current_cam = self.combo_box.currentText()
-        cmds.setAttr("{}.horizontalPan".format(current_cam), 0)
-        cmds.setAttr("{}.verticalPan".format(current_cam), 0)
-
-    def load_pan(self):
-        '''When camera changes, take camera's pan attribute 
-           offsets and apply them to the CameraView'''
-        current_camera = self.combo_box.currentText()
-        pan_x = cmds.getAttr("{}.horizontalPan".format(current_camera))
-        pan_y = cmds.getAttr("{}.verticalPan".format(current_camera))
-        pos_x = self.grid_widget.width * pan_x
-        pos_y = self.grid_widget.height * -pan_y
-        self.grid_widget.centerOn(pos_x, pos_y)
-
-    def load_zoom(self):
-        '''When camera changes, take the camera's zoom attribute 
-           and apply it to the CameraView'''
-        current_camera = self.combo_box.currentText()
-        zoom = cmds.getAttr("{}.zoom".format(current_camera))
-        self.grid_widget.setTransform(QtGui.QTransform().scale(1, 1))
-        self.grid_widget.scale(1/zoom,1/zoom)
-
     def rotate_image_plane(self, direction=1):
         '''Rotate Image Plane parented to camera and previewed in tool
         Parameters:
@@ -516,7 +531,95 @@ class CameraAdjuster(QtWidgets.QWidget):
             current_val = cmds.getAttr("{}.rotate".format(shape)) 
             self.image_plane_point.setRotation(current_val)
 
+
+class NewCamera():
+    '''Parent Class as initial template for child class camera types.'''
+    def __init__(self, parent=None, name="", grid_x=100, grid_y=100, coord_x=0.000000, coord_y=0.000000, zoom=1.000):
+        '''
+        '''
+        self.name = name
+        self.zoom = zoom
+        self.grid_x = grid_x
+        self.grid_y = grid_y
+        self.image_width = 0
+        self.coord_x = coord_x
+        self.coord_y = coord_y
+        
+    def pan_method(self, x=1, y=1):
+        pass
+    def get_pan(self):
+        pass
+    def pan_init(self):
+        self.coord_x = (cmds.getAttr("{}.horizontalPan".format(self.name))) 
+        self.coord_y = (cmds.getAttr("{}.verticalPan".format(self.name))) 
+
+    def return_coordinates(self):
+        self.coord_x = (cmds.getAttr("{}.horizontalPan".format(self.name))) 
+        self.coord_y = (cmds.getAttr("{}.verticalPan".format(self.name))) 
+        return [self.coord_x, -self.coord_y]
+
+class NewOrthoCamera(NewCamera):
+    '''Camera class for representing data for Orthographic cameras'''
+    def __init__(self, parent=None, name="", grid_x=100, grid_y=100, coord_x=0.000000, coord_y=0.000000, zoom=1.000, input_coordinates=False):
+        super(NewOrthoCamera, self).__init__(parent, name=name, coord_x=coord_x, coord_y=coord_y, zoom=zoom)
+        self.name = name
+        cur_view = OpenMayaUI.M3dView.active3dView()
+        self.coord_x = coord_x
+        self.coord_y = coord_y
+        self.pixels_to_inches = cur_view.portWidth() / cmds.getAttr(self.name + ".orthographicWidth")
+        self.input_coordinates = input_coordinates
+        self.coord_x = (cmds.getAttr("{}.horizontalPan".format(self.name)) / 3 * self.pixels_to_inches)
+        self.coord_y = (cmds.getAttr("{}.verticalPan".format(self.name))   / 3 * self.pixels_to_inches)
+
+    def pan_method(self, x=0, y=0):
+        cmds.panZoom(self.name, absolute=True, rightDistance = round(x * 3 / self.pixels_to_inches, 3))
+        cmds.panZoom( self.name, absolute=True, downDistance=round(y * 3 / self.pixels_to_inches, 3) )
+
+    def get_pan(self):
+        return [self.coord_x, self.coord_y]
+
+    def pan_init(self):
+        self.coord_x = (cmds.getAttr("{}.horizontalPan".format(self.name)) / 3 * self.pixels_to_inches)
+        self.coord_y = (cmds.getAttr("{}.verticalPan".format(self.name))   / 3 * self.pixels_to_inches)
     
+    def return_coordinates(self):
+        self.coord_x = (cmds.getAttr("{}.horizontalPan".format(self.name)) / 3 * self.pixels_to_inches)
+        self.coord_y = (cmds.getAttr("{}.verticalPan".format(self.name))   / 3 * self.pixels_to_inches)
+        return [self.coord_x, -self.coord_y]
+
+
+class NewPerspCamera(NewCamera):
+    '''Camera class for representing data for Perspective cameras'''
+    def __init__(self, parent=None, name="", grid_x=100, grid_y=100, input_coordinates=False, coord_x=0.000000, coord_y=0.000000, zoom=1.000):
+        super(NewPerspCamera, self).__init__(parent, name=name, grid_x=grid_x, grid_y=grid_y, coord_x=coord_x, coord_y=coord_y, zoom=zoom)
+        self.name = name
+        self.grid_x = grid_x
+        self.grid_y = grid_y
+        self.coord_x = coord_x
+        self.coord_y = coord_y
+        self.width = cmds.getAttr(self.name + ".horizontalFilmAperture")
+        self.height = cmds.getAttr(self.name + ".verticalFilmAperture")
+        self.input_coordinates = input_coordinates
+        self.coord_x = (cmds.getAttr("{}.horizontalPan".format(self.name)) / self.width  * self.grid_x) 
+        self.coord_y = (cmds.getAttr("{}.verticalPan".format(self.name))   / self.height * self.grid_y) 
+
+    def pan_method(self, x=1, y=1):
+        cmds.panZoom( self.name, absolute=True, rightDistance=round(x * self.width / self.grid_x, 3) )
+        cmds.panZoom( self.name, absolute=True, downDistance=round(y * self.height / self.grid_y, 3) )
+
+    def get_pan(self):
+        return [self.coord_x, self.coord_y]
+
+    def pan_init(self):
+        self.coord_x = (cmds.getAttr("{}.horizontalPan".format(self.name)) / self.width  * self.grid_x) 
+        self.coord_y = (cmds.getAttr("{}.verticalPan".format(self.name))   / self.height * self.grid_y) 
+
+    def return_coordinates(self):
+        self.coord_x = (cmds.getAttr("{}.horizontalPan".format(self.name)) / self.width  * self.grid_x) 
+        self.coord_y = (cmds.getAttr("{}.verticalPan".format(self.name))   / self.height * self.grid_y) 
+        return [self.coord_x, -self.coord_y]
+
+
 class CameraView(QtWidgets.QGraphicsView):
     '''Camera Panning and Zooming UI Component
         Parameters:
@@ -529,7 +632,7 @@ class CameraView(QtWidgets.QGraphicsView):
                 camera           : Camera being viewed through for the view to mimic
     '''
     def __init__(self, parent=None, width=300, height=300, columns=3, 
-                 rows=3, line_thickness=1, border_thickness=1, camera=""):
+                 rows=3, line_thickness=1, border_thickness=1, camera= NewCamera()):
         super(CameraView, self).__init__(parent=parent)
         # Base Settings
         self.camera = camera
@@ -540,18 +643,20 @@ class CameraView(QtWidgets.QGraphicsView):
         self.line_thickness = line_thickness
         self.border_thickness = border_thickness
         self.startPos = None
-        self.zoom = 1
+        self.zoom = self.camera.zoom
+        cur_view = OpenMayaUI.M3dView.active3dView()
+        self.pixels_to_inches = cur_view.portWidth() / cmds.getAttr(self.get_current_camera() + ".orthographicWidth")
+
         # Base Component for graph to be made
         self.setFixedSize(self.width, self.height)
         self.setObjectName("CameraView")
         self.scale(1,1)
-        self.base_rect = QtCore.QRect(-self.width*3/2, 
-                                      -self.height*3/2, 
-                                      self.width*3, 
-                                      self.height*3)
+        self.base_rect = QtCore.QRectF(-self.width*3/2, 
+                                       -self.height*3/2, 
+                                       self.width*3, 
+                                       self.height*3)
         self.graph_scene = CameraScene(rect=self.base_rect)
         # Viewer Settings
-        self.centerOn(0,0)
         self.setScene(self.graph_scene)
         self.setSceneRect(-self.width*3/2, 
                           -self.height*3/2, 
@@ -561,13 +666,24 @@ class CameraView(QtWidgets.QGraphicsView):
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         # # Drawing the Grid
         self.setDragMode(QtWidgets.QGraphicsView.DragMode.ScrollHandDrag)
+        # self.setMouseTracking(True)
         self.draw_grid()
+        self.load_pan()
+
+    def get_current_camera(self):
+        '''Get the current camera being used in the active viewport.'''
+        cur_view = OpenMayaUI.M3dView.active3dView()
+        cur_cam = OpenMaya.MDagPath()
+        cur_view.getCamera(cur_cam)
+        cur_camPath = cur_cam.fullPathName()
+        cur_camPath = cur_camPath.split("|")[-1]
+
+        return cur_camPath
 
     def draw_grid(self, color=QtCore.Qt.darkGray, line=QtCore.Qt.DashLine):
         '''Draw the dotted lines that make up the grid'''
         pos_incr_x = float(self.width*3) / self.rows
         pos_incr_y = float(self.height*3) / self.columns
-        # print(pos_incr_x, pos_incr_y)
         # Horizontal Lines
         start_num = -1
         for num in range(start_num, self.rows):
@@ -595,43 +711,68 @@ class CameraView(QtWidgets.QGraphicsView):
         self.graph_scene.addItem(rect)
 
     def reset_zoom(self):
-        self.zoom = 1
-        self.setTransform(QtGui.QTransform().scale(self.zoom, self.zoom))
-        cmds.setAttr("{}.zoom".format(self.camera), 1)
+        '''Reset the zoom of the current camera an to a default of 1 in the scene and ui'''
+        self.camera.zoom = 1
+        self.setTransform(QtGui.QTransform().scale(self.camera.zoom, self.camera.zoom))
+        cmds.setAttr("{}.zoom".format(self.camera.name), self.camera.zoom)
+        self.resetTransform()
 
     def reset_pan(self):
+        '''Reset the horizontal and vertical pan of the current camera an to a default of 0 in the scene and ui'''
         self.centerOn(0,0)
-        cmds.setAttr("{}.horizontalPan".format(self.camera), 0)
-        cmds.setAttr("{}.verticalPan".format(self.camera), 0)
+        cmds.setAttr("{}.horizontalPan".format(self.camera.name), 0)
+        cmds.setAttr("{}.verticalPan".format(self.camera.name), 0)
+        self.camera.coord_x = 0
+        self.camera.coord_y = 0
+
+    def load_zoom(self):
+        '''When camera changes, take the camera's zoom attribute 
+           and apply it to the CameraView'''
+        current_camera = self.camera.name
+        zoom = self.camera.zoom
+        cam_zoom = cmds.getAttr("{}.zoom".format(current_camera))
+        if zoom != cam_zoom:
+            zoom = cam_zoom
+            self.camera.zoom = zoom
+        self.camera.zoom = 1/zoom
+        self.setTransform(QtGui.QTransform().scale(1, 1))
+        self.scale(1/zoom,1/zoom)
+
+    def load_pan(self):
+        '''When camera changes, take camera's pan attribute 
+           offsets and apply them to the CameraView'''
+        x = self.camera.return_coordinates()
+        self.centerOn(x[0], x[1])
 
     def wheelEvent(self, event):
         '''Controls the Zoom between the Viewer and the Maya Camera'''
-        zoom_magnify_max = 4.0
-        zoom_magnify_min = 0.5
+        zoom_magnify_max = 0.5
+        zoom_magnify_min = 4.0
         angle = event.angleDelta() / 8
         degrees = angle.y() * 15
         if degrees > 0:
-            self.zoom *= 1.05
+            self.camera.zoom *= 1.05
         elif degrees < 0:
-            self.zoom /= 1.05
+            self.camera.zoom /= 1.05
         else:
-            self.zoom = 1
-        if self.zoom > zoom_magnify_max:
-            self.zoom = zoom_magnify_max
-        if self.zoom < zoom_magnify_min:
-            self.zoom = zoom_magnify_min
-        self.setTransform(QtGui.QTransform().scale(self.zoom, self.zoom))
-        cmds.setAttr("{}.zoom".format(self.camera), 1/self.zoom)
+            self.camera.zoom = 1
+        if self.camera.zoom < zoom_magnify_max:
+            self.camera.zoom = zoom_magnify_max
+        elif self.camera.zoom > zoom_magnify_min:
+            self.camera.zoom = zoom_magnify_min
+        self.setTransform(QtGui.QTransform().scale(self.camera.zoom, self.camera.zoom))
+        cmds.setAttr("{}.zoom".format(self.camera.name), 1/self.camera.zoom)
 
     def mouseMoveEvent(self, event):
         '''Controls Panning effect between the Viewer and the Maya Camera'''
         super(CameraView, self).mouseMoveEvent(event)
         bounding_box = self.mapToScene(self.viewport().geometry()).boundingRect()
         center = bounding_box.center()
-        x = center.x() - 4
-        y = center.y() - 4
-        cmds.panZoom( self.camera, absolute=True, rightDistance=(x/self.width) )
-        cmds.panZoom( self.camera, absolute=True, downDistance=(y/self.height) )
+        x = center.x()
+        y = center.y()
+        self.camera.pan_method(x=x, y=y)
+        self.camera.coord_x = x
+        self.camera.coord_y = -y
 
 
 class CameraScene(QtWidgets.QGraphicsScene):
@@ -640,7 +781,7 @@ class CameraScene(QtWidgets.QGraphicsScene):
                 rect: The Size of the scene within the view.
                 NOTE: > Value for "rect" can be bigger than width-by-height of CameraView. 
                       The bigger the rect's dimensions, the more panning area it has.'''
-    def __init__(self, parent=None, rect=QtCore.QRect(0, 0, 100, 100)):
+    def __init__(self, parent=None, rect=QtCore.QRectF(0, 0, 100, 100)):
         super(CameraScene, self).__init__(parent=parent)
         self.rect = rect
         self.setSceneRect(self.rect)
@@ -663,6 +804,7 @@ class CameraImagePoint(QtWidgets.QGraphicsPixmapItem):
             self.setOffset(QtCore.QPointF(-self.offset[0], -self.offset[1]))
             self.setOpacity(0.5)
             self.setZValue(0.5)
+            # self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
 
 
 class UpDownButtons(QtWidgets.QWidget):
@@ -964,3 +1106,35 @@ class StepWidget(QtWidgets.QWidget):
             if self.default_val > self.limits[1]:
                 self.step_box.setValue(self.limits[1])
             self.step_box.setMaximum(self.limits[1])
+
+
+class ImageScaleWidget(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        '''Widget with the purpose of controlling the scale of the imagePlane so that 
+        the imagePlane in the Maya Viewport can be made to synchronize with the pan and 
+        zoom of the tool's preview.
+        '''
+        super(ImageScaleWidget, self).__init__(parent)
+        self.main_layout = QtWidgets.QVBoxLayout()
+        self.setLayout(self.main_layout)
+        # Components
+        self.label = QtWidgets.QLabel("ImagePlane Scaling")
+        self.spinbox = QtWidgets.QDoubleSpinBox()
+        self.spinbox.setMaximum(2.000)
+        self.spinbox.setDecimals(3)
+        self.slider = QtWidgets.QSlider()
+        self.slider.setMaximum(2000)
+        self.spinbox.valueChanged(self.update_slider)
+        self.slider.valueChanged(self.update_spinbox)
+        # Assemble Components
+        self.main_layout.addWidget(self.label)
+        self.main_layout.addWidget(self.spinbox)
+        self.main_layout.addWidget(self.slider)
+
+    def update_spinbox(self):
+        self.spinbox.setValue(self.slider.value() / 1000.000)
+        
+    def update_slider(self):
+        self.slider.setValue(self.spinbox.value() * 1000.000)
+
+
